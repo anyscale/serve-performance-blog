@@ -1,0 +1,26 @@
+name: blog-recsys-oss-nightly-unoptimized
+image_uri: anyscale/ray-llm:nightly-py311-cu128
+compute_config:
+  cloud: anyscale_v2_default_cloud
+  head_node:
+    instance_type: m8a.xlarge
+  worker_nodes:
+    - instance_type: g6.12xlarge
+      min_nodes: 0
+      max_nodes: 1
+applications:
+  - name: default
+    route_prefix: /
+    import_path: app:entrypoint
+    runtime_env:
+      working_dir: .
+      pip: requirements.txt
+    deployments:
+      - name: ingress_deployment
+        num_replicas: 2
+        max_ongoing_requests: 1000
+      - name: ranker_deployment
+        num_replicas: 1
+        ray_actor_options:
+          num_gpus: 1
+        max_ongoing_requests: 1000
