@@ -1,7 +1,6 @@
 from locust import HttpUser, task, between, events
 
-# 10KB payload (10240 bytes of 'A')
-PAYLOAD_10KB = "A" * 10240
+PAYLOAD = ""
 
 
 @events.init_command_line_parser.add_listener
@@ -10,7 +9,7 @@ def _(parser):
     parser.add_argument(
         "--route_prefix",
         type=str,
-        default=f"/echo?message={PAYLOAD_10KB}",
+        default=f"/echo?message={PAYLOAD}",
         help="Route prefix",
     )
 

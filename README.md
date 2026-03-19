@@ -1,99 +1,147 @@
-# Blog Post Benchmarks: Ray Serve Performance
+# Ray Serve Performance Benchmarks
 
-Reproduction scripts and results for the Ray Serve performance blog post.
-Compares **Ray Serve nightly (optimized)** vs **Ray Serve nightly (default)**.
+Measuring the impact of Ray Serve nightly optimizations (HAProxy, gRPC, throughput mode, GC tuning) against the nightly baseline with all optimizations disabled.
 
-## Benchmarks
+## Comparison: Optimized vs Unoptimized
 
-### 1. Feature-by-Feature Microbenchmarks (`features/`)
+Both variants run the same nightly Ray image (`anyscale/ray-llm:nightly-py311-cu128`). The only difference is environment variables that toggle optimizations on or off.
 
-Isolates individual optimizations (HAProxy, gRPC, GC/event-loop tuning, all-on)
-using a synthetic 10 KB unary/streaming workload. Sweeps concurrency from 1–256.
+| Flag | Optimized | Unoptimized |
+|---|---|---|
+| `RAY_SERVE_ENABLE_HA_PROXY` | 1 | unset |
+| `RAY_SERVE_HAPROXY_TCP_NODELAY` | 1 | unset |
+| `RAY_SERVE_USE_GRPC_BY_DEFAULT` | 1 | unset |
+| `RAY_SERVE_THROUGHPUT_OPTIMIZED` | 1 | unset |
+| `RAY_SERVE_RUN_ROUTER_IN_SEPARATE_LOOP` | 1 | unset |
+| `RAY_SERVE_RUN_USER_CODE_IN_SEPARATE_THREAD` | 0 | unset |
 
-- **Unary app:** `unary_app/fastapi_dep.py` — echo deployment
-- **Streaming app:** `streaming_app/app.py` — mock streaming deployment
-- **Configs:** `features/configs/` — one YAML per (feature × protocol) combination
-- **Run:** `python features/sweep.py` (calls `anyscale service deploy`; # serve run <config>.yaml)
-- **Plot:** `python features/plot.py`
+---
 
-### 2. Recsys — Model Composition (`recsys/`)
+## Benchmark Suites
 
-Two-tier DLRM recommendation system: CPU ingress + GPU ranker.
-Measures RPS and latency at increasing concurrency, showing HAProxy + gRPC impact.
+### 1. Features — Isolated Optimization Microbenchmarks
+
+Isolates individual optimizations using synthetic unary and streaming workloads to attribute gains to specific flags.
+
+**Deployment architecture:**
+- App: `unary_app/fastapi_dep.py` (unary) / `streaming_app/app.py` (streaming)
+- Unary chain: `ASGIIngressDeployment` → `Echo` deployment (10KB payload echo)
+- Streaming chain: `MyDeployment` → `GrandChildDeployment` (50 SSE chunks per request)
+- `max_ongoing_requests`: 100,000 per deployment
+
+**Cluster (1-replica configs):**
+- Head: m8a.xlarge (4 vCPU, 16 GiB)
+- Worker: 1x m7a.4xlarge (16 vCPU, 64 GiB)
+
+**Cluster (8-replica configs):**
+- Head: m8a.xlarge (4 vCPU, 16 GiB)
+- Worker: 1x m7a.8xlarge
+
+**Comparisons run:** gRPC on/off, HAProxy on/off, single event loop on/off, all-on/off (1 replica), all-on/off (8 replicas)
+
+**Client:**
+- Locust with 128 worker processes
+- Unary concurrency sweep: 1, 2, 4, 8, 16, 32, 64, 128, 256
+- Streaming concurrency sweep: 1, 2, 4, 8, 16, 32, 64, 128
+- 60s per concurrency level, 15s cooldown between levels
+- SLA thresholds: 200ms (unary), 700ms (streaming)
+
+---
+
+### 2. Recsys — Model Composition with Heterogeneous Compute
+
+Two-tier DLRM recommendation pipeline exercising inter-deployment communication over heterogeneous hardware.
+
+**Deployment architecture:**
+- `IngressDeployment` (FastAPI): 2 CPU replicas, `max_ongoing_requests=1,000`
+  - Synthesizes a batch of 32 feature vectors (13 dense, 26 sparse features)
+  - Forwards batch to ranker via deployment handle
+- `RankerDeployment`: 1 GPU replica, `max_ongoing_requests=1,000`
+  - MiniDLRM model (embedding dim 64, cardinality 100K, bottom MLP [256, 64], top MLP [256, 128, 64])
+  - `max_batch_size=100`, `batch_wait_timeout_s=0.05`
+
+**Cluster:**
+- Head: m8a.xlarge
+- Worker: 1x g6.12xlarge (4x L4 GPU — only 1 GPU used by ranker)
+
+**Client:**
+- Locust, `constant(0)` wait time (max throughput)
+- Concurrency sweep: 10, 20, 30, 40, 50, 75, 100, 150, 200, 300, 500
+
+---
+
+### 3. LLM — Single-Node Replica Scaling + vLLM Comparison
+
+LLM inference via `ray.serve.llm` APIs on a single node, plus standalone vLLM baseline (no Ray Serve).
+
+**Deployment architecture:**
+- Model: `openai/gpt-oss-20b`, TP=1, `max_model_len=4,096`
+- `gpu_memory_utilization=0.95`, `max_num_seqs=256`, `max_num_batched_tokens=16,384`
+- Replicas swept: [1, 2, 4, 8]
+- Ingress replicas: `4 * num_replicas`
+- `max_ongoing_requests=8,192`
+
+**Cluster:**
+- Head: p5.48xlarge
+
+**Client:**
+- `vllm bench serve`
+- Input: 512 tokens, output: 128 tokens
+- Concurrency per replica: 256
+- Prompts per replica: 1,024
+
+---
+
+
+## Running Benchmarks
+
+### Features
+
+```bash
+cd features
+python sweep.py      # deploys all configs, benchmarks, collects results
+python plot.py       # generates throughput-vs-latency plots
+```
+
+### Recsys
 
 ```bash
 cd recsys
-anyscale service deploy -f service-oss-nightly.yaml              # serve run service-oss-nightly.yaml
-anyscale service deploy -f service-oss-nightly-unoptimized.yaml  # serve run service-oss-nightly-unoptimized.yaml
-# Set HOST_*/TOKEN_* env vars, then:
+anyscale service deploy -f service-oss-nightly.yaml          # optimized
+anyscale service deploy -f service-oss-nightly-unoptimized.yaml  # baseline
+
+# Set env vars from Anyscale console
+export HOST_OPTIMIZED="https://..."
+export TOKEN_OPTIMIZED="..."
+export HOST_UNOPTIMIZED="https://..."
+export TOKEN_UNOPTIMIZED="..."
+
 cd ..
-python run_locust.py ...
+python run_locust.py
 python plot_recsys.py
 ```
 
-### 3. LLM — Streaming Inference (`llm/`)
-
-Real LLM inference using `ray.serve.llm` APIs.
-Replica sweep (1–20 replicas) with `vllm bench serve`.
+### LLM
 
 ```bash
-cd llm/scripts
-python sweep_replicas.py             # generates YAMLs + anyscale service deploy; # serve run <generated>.yaml
-python visualize_replica_sweep.py
+cd llm-single-node
+python sweep_replicas.py
+python plot_throughput.py
+python plot_vllm_2x2.py
 ```
 
-### 4. TTFT Optimization (`ttft-optimization/`)
-
-Compares Time-To-First-Token across vLLM direct, Ray Serve optimized,
-and default Ray Serve (gemma-3-12b-it, TP=4, ISL=512, OSL=256).
+### Summary Chart
 
 ```bash
-# Start server (vLLM direct, or Ray Serve via serve_app.py)
-# serve run ttft-optimization/serve_app.py
-python ttft-optimization/bench.py --endpoint http://localhost:8000/v1 \
-    --model google/gemma-3-12b-it --concurrencies 8,64,256 \
-    --results-dir results/vllm_direct
-python ttft-optimization/plot.py
+python plot_peak_gains.py    # aggregates peak gains across all suites
 ```
 
-## Project Structure
+## Output
 
-```
-serve-performance-blog/
-├── README.md
-├── features/
-│   ├── configs/                  # Service YAMLs per feature × protocol
-│   ├── locustfile_10kb.py
-│   ├── sweep.py
-│   ├── plot.py
-│   └── results/
-├── unary_app/
-│   └── fastapi_dep.py            # Echo deployment (used by features/ unary configs)
-├── streaming_app/
-│   ├── app.py                    # Mock streaming deployment (used by features/ streaming configs)
-│   └── llm_stream_benchmark.py   # Streaming benchmark script (used by features/sweep.py)
-├── recsys/
-│   ├── app.py, model.py, config.py
-│   ├── locustfile.py
-│   ├── service-oss-nightly.yaml
-│   └── service-oss-nightly-unoptimized.yaml
-├── llm/
-│   ├── app.py, app_autoscale.py
-│   ├── scripts/
-│   │   ├── sweep_replicas.py
-│   │   ├── sweep_concurrency.py
-│   │   ├── visualize_replica_sweep.py
-│   │   └── visualize_rps_sweep.py
-│   └── results/
-├── ttft-optimization/
-│   ├── README.md
-│   ├── bench.py
-│   ├── plot.py
-│   └── serve_app.py
-├── results/                      # Recsys result JSONs
-├── run_locust.py                 # Locust runner
-├── plot_recsys.py
-├── plot_llm.py
-├── plot_peak_gains.py
-└── *.png                         # Pre-generated plots
-```
+| Directory | Contents |
+|---|---|
+| `features/results/` | Per-comparison CSVs, per-concurrency JSONs, plots |
+| `results/recsys/` | Locust JSON per concurrency level per variant |
+| `llm-single-node/results/` | Ray Serve replica sweep results |
+| `llm-single-node/results_vllm/` | Standalone vLLM baseline results |
+| `peak_performance_gains.png` | Summary bar chart across all workloads |

@@ -15,7 +15,7 @@ applications:
   - name: default
     route_prefix: /
     runtime_env:
-      working_dir: ../../unary_app/
+      working_dir: ../../../test_service/
     import_path: fastapi_dep:entrypoint
     deployments:
       - name: Echo

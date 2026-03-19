@@ -1,19 +1,15 @@
 name: blog-features-grpc-on-streaming
 image_uri: anyscale/ray-llm:nightly-py311-cu128
 cloud: anyscale_v2_default_cloud
-compute_config:
-  cloud: anyscale_v2_default_cloud
-  head_node:
-    instance_type: m8a.xlarge
-  worker_nodes:
-    - instance_type: m7a.4xlarge
-      min_nodes: 1
-      max_nodes: 1
+compute_config: seiji-perf-bench
+env_vars:
+  ANYSCALE_TRACING_EXPORTER_IMPORT_PATH: ""
+  RAY_SERVE_USE_GRPC_BY_DEFAULT: "1"
 applications:
   - name: app1
     route_prefix: /
     runtime_env:
-      working_dir: ../../streaming_app/
+      working_dir: ../../../streaming/
     import_path: app:app
     deployments:
       - name: GrandChildDeployment

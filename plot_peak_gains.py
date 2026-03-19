@@ -6,7 +6,7 @@ Left group:  throughput speed-up (x) for RecSys, LLM, and gRPC streaming.
 Right group: latency as fraction of original for RecSys, LLM, and gRPC streaming.
 
 Usage:
-    cd serve-performance-blog
+    cd serve-perf/blog
     python plot_peak_gains.py
 """
 
@@ -186,7 +186,7 @@ import seaborn as sns
 colors = sns.color_palette("crest", 4)
 x = np.array([0, 1, 2, 3])
 width = 0.5
-labels = ["RecSys", "LLM", "Echo Unary", "Echo Streaming"]
+labels = ["RecSys", "LLM", "No-Op Unary", "Echo Streaming"]
 
 # ── Left: Throughput speed-up ─────────────────────────────────────────────────
 speedups = [recsys_speedup, llm_speedup, allon_u_speedup, allon_speedup]

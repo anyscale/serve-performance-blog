@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Visualize recsys (DLRM) benchmark results: optimized vs unoptimized nightly.
+Visualize recsys (DLRM) benchmark results: OSS 2.53 vs Nightly.
 
 Usage:
-    cd serve-performance-blog
+    cd serve-perf/blog
     python plot_recsys.py [--results-dir results/recsys] [--output results_recsys.png]
 """
 

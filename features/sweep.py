@@ -27,7 +27,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import yaml
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BLOG_DIR = os.path.dirname(SCRIPT_DIR)  # serve-performance-blog/
+SERVE_PERF_DIR = os.path.dirname(os.path.dirname(SCRIPT_DIR))  # serve-perf/
 CONFIGS_DIR = os.path.join(SCRIPT_DIR, "configs")
 RESULTS_DIR = os.path.join(SCRIPT_DIR, "results")
 
@@ -65,12 +65,20 @@ VARIANTS = {
     "allon8": ["on", "off"],
 }
 
+# Comparisons that share an identical "off" baseline service config.
+# Only the canonical comparison is deployed+benchmarked; results are copied to others.
+SHARED_BASELINE = {
+    "canonical": "grpc",
+    "members": {"grpc": "off", "haproxy": "off", "allon": "off", "gc_eventloop": "unoptimized"},
+}
+
 UNARY_CONCURRENCIES = [1, 2, 4, 8, 16, 32, 64, 128, 256]
 STREAMING_CONCURRENCIES = [1, 2, 4, 8, 16, 32, 64, 128]
 LOCUST_PROCESSES = 128
 STREAMING_REQUEST_MULTIPLIER = {
     "allon8": 8,
 }
+STREAMING_MIN_REQUESTS = 3840
 STREAMING_NUM_WORKERS = 8
 LOCUST_RUN_TIME = 60  # seconds per concurrency level
 COOLDOWN_S = 15
@@ -222,7 +230,23 @@ def _write_unary_csv(result_dir: str, label: str):
             continue
 
         with open(json_path) as f:
-            data = json.load(f)
+            raw = f.read()
+        # Locust may concatenate multiple JSON values (e.g. "[][{...},{...}]"
+        # or "[]  {...}  {...}"). Parse all top-level values and collect dicts.
+        decoder = json.JSONDecoder()
+        data = []
+        idx = 0
+        while idx < len(raw):
+            raw_stripped = raw[idx:].lstrip()
+            if not raw_stripped:
+                break
+            idx = len(raw) - len(raw_stripped)
+            obj, end = decoder.raw_decode(raw, idx)
+            if isinstance(obj, list) and obj:
+                data = obj
+            elif isinstance(obj, dict):
+                data.append(obj)
+            idx += end
 
         # Find the "Aggregated" entry
         agg = None
@@ -281,7 +305,7 @@ def run_streaming_sweep(comparison: str, variant: str, host: str, token: str):
     label = f"{comparison}_{variant}_streaming"
     csv_path = os.path.join(RESULTS_DIR, f"{label}.csv")
     benchmark_script = os.path.join(
-        BLOG_DIR, "streaming_app", "llm_stream_benchmark.py"
+        SERVE_PERF_DIR, "streaming", "llm_stream_benchmark.py"
     )
     concurrencies_str = ",".join(str(c) for c in STREAMING_CONCURRENCIES)
 
@@ -292,6 +316,7 @@ def run_streaming_sweep(comparison: str, variant: str, host: str, token: str):
 
     request_multiplier = STREAMING_REQUEST_MULTIPLIER.get(comparison, 1)
     max_num_workers = STREAMING_NUM_WORKERS
+    min_requests = STREAMING_MIN_REQUESTS
     # Only use multiprocessing for concurrency levels >= num_workers,
     # otherwise workers get concurrency=0 and hang.
     # Split into two runs: low concurrency (single process) and high concurrency (multi-process).
@@ -306,6 +331,7 @@ def run_streaming_sweep(comparison: str, variant: str, host: str, token: str):
         "-ttft", "0",
         "-mt", "50",
         "--request-multiplier", str(request_multiplier),
+        "--min-requests", str(min_requests),
     ]
 
     if low_concs:
@@ -371,38 +397,57 @@ def _result_csv_exists(comp: str, variant: str, m: str) -> bool:
     return os.path.exists(csv_path)
 
 
+def _is_shared_baseline(comp: str, variant: str) -> bool:
+    """Check if this job is a shared baseline (identical config across comparisons)."""
+    return comp in SHARED_BASELINE["members"] and SHARED_BASELINE["members"][comp] == variant
+
+
+def _is_canonical_baseline(comp: str, variant: str) -> bool:
+    """Check if this is the canonical job for the shared baseline group."""
+    return _is_shared_baseline(comp, variant) and comp == SHARED_BASELINE["canonical"]
+
+
 def run_all(comparisons: list[str], mode: str, resume: bool = False):
     """Deploy all services in parallel, run benchmarks, tear down."""
     jobs = collect_jobs(comparisons, mode)
 
+    # Separate shared-baseline duplicates from real jobs.
+    # Only the canonical baseline is deployed+benchmarked; others get copies.
+    canonical_variant = SHARED_BASELINE["members"][SHARED_BASELINE["canonical"]]
+    deploy_jobs = []
+    copy_jobs = []  # (source_label, target_label)
+    for comp, variant, m, config_path in jobs:
+        if _is_shared_baseline(comp, variant) and not _is_canonical_baseline(comp, variant):
+            source_label = f"{SHARED_BASELINE['canonical']}_{canonical_variant}_{m}"
+            target_label = f"{comp}_{variant}_{m}"
+            copy_jobs.append((source_label, target_label))
+        else:
+            deploy_jobs.append((comp, variant, m, config_path))
+
     if resume:
-        skipped = [(c, v, m) for c, v, m, _ in jobs if _result_csv_exists(c, v, m)]
+        skipped = [(c, v, m) for c, v, m, _ in deploy_jobs if _result_csv_exists(c, v, m)]
         if skipped:
             print(f"\n  Skipping {len(skipped)} completed benchmarks:")
             for c, v, m in skipped:
                 print(f"    - {c}_{v}_{m}")
-        # Only deploy services for jobs that still need benchmarking
-        jobs_to_deploy = [
-            j for j in jobs if not _result_csv_exists(j[0], j[1], j[2])
+        deploy_jobs = [
+            j for j in deploy_jobs if not _result_csv_exists(j[0], j[1], j[2])
         ]
-    else:
-        jobs_to_deploy = jobs
 
-    if not jobs_to_deploy:
+    if not deploy_jobs:
         print("  All benchmarks already completed!")
         return
 
     print(f"\n{'=' * 60}")
-    print(f"  Deploying/locating {len(jobs_to_deploy)} services ...")
+    print(f"  Deploying/locating {len(deploy_jobs)} services ...")
     print(f"{'=' * 60}")
 
     # Phase 1: Deploy + wait for all services in parallel
-    # Maps config_path -> (service_name, base_url, token)
     ready = {}
-    with ThreadPoolExecutor(max_workers=len(jobs_to_deploy)) as pool:
+    with ThreadPoolExecutor(max_workers=len(deploy_jobs)) as pool:
         futures = {
             pool.submit(deploy_and_wait, config_path, resume): (comp, variant, m, config_path)
-            for comp, variant, m, config_path in jobs_to_deploy
+            for comp, variant, m, config_path in deploy_jobs
         }
         for future in as_completed(futures):
             comp, variant, m, config_path = futures[future]
@@ -413,12 +458,12 @@ def run_all(comparisons: list[str], mode: str, resume: bool = False):
                 print(f"  FAILED to deploy {comp}/{variant}/{m}: {e}")
 
     print(f"\n{'=' * 60}")
-    print(f"  {len(ready)}/{len(jobs_to_deploy)} services ready. Running benchmarks ...")
+    print(f"  {len(ready)}/{len(deploy_jobs)} services ready. Running benchmarks ...")
     print(f"{'=' * 60}")
 
     # Phase 2: Run benchmarks sequentially (one at a time for clean results)
     try:
-        for comp, variant, m, config_path in jobs_to_deploy:
+        for comp, variant, m, config_path in deploy_jobs:
             if config_path not in ready:
                 print(f"  Skipping {comp}/{variant}/{m} (deploy failed)")
                 continue
@@ -429,17 +474,20 @@ def run_all(comparisons: list[str], mode: str, resume: bool = False):
                 run_unary_sweep(comp, variant, base_url, token)
             else:
                 run_streaming_sweep(comp, variant, base_url, token)
-    finally:
-        # Phase 3: Terminate all services
-        print(f"\n{'=' * 60}")
-        print(f"  Terminating all services ...")
-        print(f"{'=' * 60}")
 
-        for config_path, (service_name, _, _) in ready.items():
-            try:
-                terminate_service(service_name)
-            except Exception as e:
-                print(f"  Warning: could not terminate {service_name}: {e}")
+    finally:
+        # Copy shared baseline results to other comparisons (always runs)
+        import shutil
+        for source_label, target_label in copy_jobs:
+            src = os.path.join(RESULTS_DIR, f"{source_label}.csv")
+            dst = os.path.join(RESULTS_DIR, f"{target_label}.csv")
+            if os.path.exists(src):
+                shutil.copy2(src, dst)
+                print(f"  Copied {source_label}.csv -> {target_label}.csv")
+            else:
+                print(f"  Warning: cannot copy {source_label}.csv (not found)")
+        # Skip service termination for debugging
+        print(f"\n  Services left running for debugging.")
 
 
 # ---------------------------------------------------------------------------

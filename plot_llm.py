@@ -3,7 +3,7 @@
 Convenience wrapper: runs the LLM replica sweep visualization.
 
 Usage:
-    cd serve-performance-blog
+    cd serve-perf/blog
     python plot_llm.py [results_dir]
 """
 

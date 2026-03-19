@@ -1,0 +1,12 @@
+[
+  {
+    "replicas": 8,
+    "concurrency": 2048,
+    "request_throughput": 269.82864191614027,
+    "output_throughput": 34538.066165265955,
+    "total_throughput": null,
+    "mean_ttft_ms": 2449.0348191412377,
+    "mean_tpot_ms": 35.56305321814059,
+    "mean_e2el_ms": 6965.542577845092
+  }
+]

@@ -10,14 +10,16 @@ compute_config:
       min_nodes: 1
       max_nodes: 1
 env_vars:
+  ANYSCALE_TRACING_EXPORTER_IMPORT_PATH: ""
   RAY_SERVE_ENABLE_HA_PROXY: "1"
+  ANYSCALE_RAY_SERVE_ENABLE_HA_PROXY: "1"
   RAY_SERVE_HAPROXY_TCP_NODELAY: "1"
   RAY_SERVE_THROUGHPUT_OPTIMIZED: "1"
 applications:
   - name: default
     route_prefix: /
     runtime_env:
-      working_dir: ../../unary_app/
+      working_dir: ../../../test_service/
     import_path: fastapi_dep:entrypoint
     deployments:
       - name: Echo

@@ -15,7 +15,7 @@ applications:
   - name: app1
     route_prefix: /
     runtime_env:
-      working_dir: ../../streaming_app/
+      working_dir: ../../../streaming/
     import_path: app:app
     deployments:
       - name: GrandChildDeployment

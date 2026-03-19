@@ -1,0 +1,8 @@
+        engine_kwargs=dict(
+            tensor_parallel_size=1,
+            max_model_len=1024,
+            gpu_memory_utilization=0.95,
+            max_num_seqs=300,
+            max_num_batched_tokens=150000,
+            enable_prefix_caching=False,
+        ),

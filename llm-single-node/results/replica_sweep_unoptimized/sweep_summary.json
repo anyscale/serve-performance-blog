@@ -1,0 +1,42 @@
+[
+  {
+    "replicas": 1,
+    "concurrency": 256,
+    "request_throughput": 43.34503658873576,
+    "output_throughput": 5548.164683358177,
+    "total_throughput": null,
+    "mean_ttft_ms": 1591.5552018125036,
+    "mean_tpot_ms": 32.96504624095719,
+    "mean_e2el_ms": 5778.116074414069
+  },
+  {
+    "replicas": 2,
+    "concurrency": 512,
+    "request_throughput": 66.15776757679757,
+    "output_throughput": 8468.194249830089,
+    "total_throughput": null,
+    "mean_ttft_ms": 2141.545379223631,
+    "mean_tpot_ms": 40.10678200843149,
+    "mean_e2el_ms": 7235.106694294429
+  },
+  {
+    "replicas": 4,
+    "concurrency": 1024,
+    "request_throughput": 93.15489521947973,
+    "output_throughput": 11923.826588093405,
+    "total_throughput": null,
+    "mean_ttft_ms": 4761.223663288084,
+    "mean_tpot_ms": 45.99226945058941,
+    "mean_e2el_ms": 10602.24188351294
+  },
+  {
+    "replicas": 8,
+    "concurrency": 2048,
+    "request_throughput": 110.78032095553829,
+    "output_throughput": 14179.8810823089,
+    "total_throughput": null,
+    "mean_ttft_ms": 9527.15235514966,
+    "mean_tpot_ms": 61.48499499025554,
+    "mean_e2el_ms": 17335.746718912113
+  }
+]

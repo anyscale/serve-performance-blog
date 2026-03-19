@@ -1,19 +1,14 @@
 name: blog-features-grpc-off-unary
 image_uri: anyscale/ray-llm:nightly-py311-cu128
 cloud: anyscale_v2_default_cloud
-compute_config:
-  cloud: anyscale_v2_default_cloud
-  head_node:
-    instance_type: m8a.xlarge
-  worker_nodes:
-    - instance_type: m7a.4xlarge
-      min_nodes: 1
-      max_nodes: 1
+compute_config: seiji-perf-bench
+env_vars:
+  ANYSCALE_TRACING_EXPORTER_IMPORT_PATH: ""
 applications:
   - name: default
     route_prefix: /
     runtime_env:
-      working_dir: ../../unary_app/
+      working_dir: ../../../test_service/
     import_path: fastapi_dep:entrypoint
     deployments:
       - name: Echo

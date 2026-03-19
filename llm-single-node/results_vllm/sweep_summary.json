@@ -1,0 +1,47 @@
+[
+  {
+    "concurrency": 16,
+    "request_throughput": 16.18421621596284,
+    "output_throughput": 2071.5796756432437,
+    "total_throughput": null,
+    "mean_ttft_ms": 274.3220771005901,
+    "mean_tpot_ms": 5.618553047943795,
+    "mean_e2el_ms": 987.878314189452
+  },
+  {
+    "concurrency": 32,
+    "request_throughput": 26.51218676860424,
+    "output_throughput": 3393.559906381343,
+    "total_throughput": null,
+    "mean_ttft_ms": 253.24476457616862,
+    "mean_tpot_ms": 7.4845550592857775,
+    "mean_e2el_ms": 1203.7832571054623
+  },
+  {
+    "concurrency": 64,
+    "request_throughput": 30.99872433392695,
+    "output_throughput": 3967.8367147426497,
+    "total_throughput": null,
+    "mean_ttft_ms": 693.4797858212876,
+    "mean_tpot_ms": 10.767456531811419,
+    "mean_e2el_ms": 2060.946765361338
+  },
+  {
+    "concurrency": 128,
+    "request_throughput": 45.17007359842664,
+    "output_throughput": 5781.76942059861,
+    "total_throughput": null,
+    "mean_ttft_ms": 896.2500820625067,
+    "mean_tpot_ms": 15.188537762280017,
+    "mean_e2el_ms": 2825.194377872069
+  },
+  {
+    "concurrency": 256,
+    "request_throughput": 59.05248053978427,
+    "output_throughput": 7558.7175090923865,
+    "total_throughput": null,
+    "mean_ttft_ms": 1234.4292368525314,
+    "mean_tpot_ms": 24.25913366447013,
+    "mean_e2el_ms": 4315.339212240237
+  }
+]

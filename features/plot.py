@@ -22,18 +22,19 @@ RESULTS_DIR = os.path.join(SCRIPT_DIR, "results")
 # Colors: optimized = red, default = blue.
 COMPARISONS = {
     "grpc": {
-        "title": "gRPC",
+        "title": "Interdeployment gRPC",
         "variants": {"on": "gRPC enabled", "off": "gRPC disabled"},
         "roles": {"on": "optimized", "off": "default"},
         "unary_sla_ms": 200,
     },
     "haproxy": {
-        "title": "HAProxy",
+        "title": "HAProxy Ingress",
         "variants": {"on": "HAProxy enabled", "off": "HAProxy disabled"},
         "roles": {"on": "optimized", "off": "default"},
     },
     "gc_eventloop": {
         "title": "Single Event Loop",
+
         "variants": {
             "optimized": "Optimized (single EL)",
             "unoptimized": "Unoptimized (defaults)",
@@ -42,12 +43,12 @@ COMPARISONS = {
         "unary_sla_ms": 125,
     },
     "allon": {
-        "title": "All Optimizations",
+        "title": "RAY_SERVE_THROUGHPUT_OPTIMIZED",
         "variants": {"on": "All optimizations", "off": "Baseline"},
         "roles": {"on": "optimized", "off": "default"},
     },
     "allon8": {
-        "title": "All Optimizations (8 Replicas)",
+        "title": "RAY_SERVE_THROUGHPUT_OPTIMIZED (8 Replicas)",
         "variants": {"on": "All optimizations", "off": "Baseline"},
         "roles": {"on": "optimized", "off": "default"},
     },
@@ -74,14 +75,14 @@ def plot_throughput_vs_latency(
     ax,
     data_series: list[tuple[str, pd.DataFrame, str, str, str, str]],
     title: str,
-    subtitle: str,
     sla_ms: float,
 ):
     """Plot throughput vs p99 latency with concurrency labels.
 
     data_series: list of (label, df, throughput_col, latency_col, color, role)
     """
-    last_points = {}  # role -> (last_throughput, last_latency)
+    # role -> {concurrency: (throughput, latency)}
+    role_data = {}
 
     for label, df, tp_col, lat_col, color, role in data_series:
         throughput = df[tp_col]
@@ -98,7 +99,7 @@ def plot_throughput_vs_latency(
 
         for x, y, c in zip(latency, throughput, concurrencies):
             ax.annotate(
-                str(int(c)),
+                f"c={int(c)}",
                 (x, y),
                 textcoords="offset points",
                 xytext=(6, 6),
@@ -107,50 +108,56 @@ def plot_throughput_vs_latency(
                 alpha=0.8,
             )
 
-        if len(throughput) > 0:
-            last_points[role] = (throughput.iloc[-1], latency.iloc[-1])
+        role_data[role] = {
+            int(c): (tp, lat)
+            for c, tp, lat in zip(concurrencies, throughput, latency)
+        }
 
-    # Annotate throughput gain between optimized and default
-    if "optimized" in last_points and "default" in last_points:
-        opt_tp, opt_lat = last_points["optimized"]
-        def_tp, def_lat = last_points["default"]
-        if def_tp > 0:
-            ratio = opt_tp / def_tp
-            ratio_str = f"{ratio:.2f}x" if ratio < 1.1 else f"{ratio:.1f}x"
-            # Start at the last point with lower latency, arrow down to
-            # the other curve's goodput at that same x position
-            if opt_lat <= def_lat:
-                arrow_x = opt_lat
-                arrow_from = opt_tp
-                arrow_to = def_tp
+    # Annotate throughput gain: peak optimized vs default at same concurrency
+    if "optimized" in role_data and "default" in role_data:
+        opt_points = role_data["optimized"]
+        def_points = role_data["default"]
+        if opt_points:
+            # Find peak throughput concurrency on optimized curve
+            peak_c = max(opt_points, key=lambda c: opt_points[c][0])
+            opt_tp, opt_lat = opt_points[peak_c]
+            # Look up default at same concurrency, fall back to highest available default
+            def_c = None
+            if peak_c in def_points and def_points[peak_c][0] > 0:
+                def_c = peak_c
             else:
-                arrow_x = def_lat
-                arrow_from = def_tp
-                arrow_to = opt_tp
-            ax.annotate(
-                "",
-                xy=(arrow_x, arrow_to),
-                xytext=(arrow_x, arrow_from),
-                arrowprops=dict(
-                    arrowstyle="<->",
+                available = sorted(def_points.keys(), reverse=True)
+                if available:
+                    def_c = available[0]
+            if def_c is not None:
+                def_tp, def_lat = def_points[def_c]
+                ratio = opt_tp / def_tp
+                ratio_str = f"{ratio:.2f}x" if ratio < 1.1 else f"{ratio:.1f}x"
+                # Draw arrow between the two points at the same concurrency
+                ax.annotate(
+                    "",
+                    xy=(opt_lat, def_tp),
+                    xytext=(opt_lat, opt_tp),
+                    arrowprops=dict(
+                        arrowstyle="<->",
+                        color="#333333",
+                        lw=1.5,
+                    ),
+                )
+                mid_y = (opt_tp + def_tp) / 2
+                ax.text(
+                    opt_lat,
+                    mid_y,
+                    f"  {ratio_str} gain",
+                    ha="left",
+                    va="center",
+                    fontsize=10,
+                    fontweight="bold",
                     color="#333333",
-                    lw=1.5,
-                ),
-            )
-            mid_y = (arrow_from + arrow_to) / 2
-            ax.text(
-                arrow_x,
-                mid_y,
-                f"{ratio_str} gain  ",
-                ha="right",
-                va="center",
-                fontsize=10,
-                fontweight="bold",
-                color="#333333",
-            )
+                )
 
-    ax.set_title(f"{title}\n{subtitle}", fontsize=11, fontweight="bold")
-    ax.legend(fontsize=9, loc="upper left")
+    ax.set_title(title, fontsize=11, fontweight="bold")
+    ax.legend(fontsize=9, loc="lower right", title="c = concurrent users")
     ax.grid(True, alpha=0.3)
 
 
@@ -190,8 +197,7 @@ def generate_combined_plot(comparison: str, cfg: dict):
         plot_throughput_vs_latency(
             ax_unary,
             unary_series,
-            f"{cfg['title']} — Unary (10KB echo)",
-            "Plotted by concurrency",
+            f"{cfg['title']}: Unary (empty string echo)",
             unary_sla,
         )
         ax_unary.set_xlabel("P99 Latency (ms)")
@@ -203,8 +209,7 @@ def generate_combined_plot(comparison: str, cfg: dict):
         plot_throughput_vs_latency(
             ax_stream,
             streaming_series,
-            f"{cfg['title']} — Streaming (10KB in 50 SSE chunks)",
-            "Plotted by concurrency",
+            f"{cfg['title']}: Streaming (50 SSE chunks)",
             streaming_sla,
         )
         ax_stream.set_xlabel("P99 E2E Latency (ms)")
